@@ -19,14 +19,10 @@
 %%% OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 %%% SOFTWARE.
 %%%-----------------------------------------------------------------------------
-%%% @doc
-%%% modbus client which connects device.
-%%%
-%%% @end
-%%%-----------------------------------------------------------------------------
+
 -module(emq_modbus_device).
 
--include("emodbus.hrl").
+-include("emq_modbus.hrl").
 
 %% API Exports
 -export([connect/3, disconnect/1, send_request/2]).
@@ -38,10 +34,12 @@
          terminate/2, code_change/3]).
 
 -record(state, {
-    server_addr     :: term(),
-        socket      :: inet:socket(),
-    device_name     :: binary(),
-        tid = 1     :: 1..16#ff
+    server_addr  :: term(),
+         socket  :: inet:socket(),
+  timeout_count  :: integer(),
+    device_name  :: binary(),
+    pending_req  :: undefined | term(),
+        tid = 1  :: 1..16#ff
  }).
 
 -define(CALL_TIMEOUT, 60000).
@@ -49,6 +47,8 @@
 -define(SOCK_TIMEOUT, 5000).
 
 -define(RECV_TIMEOUT, 10000).
+
+-define(TIMEOUT_MAX, 5).
 
 %% Modbus Socket Options
 -define(SOCKOPTS, [
@@ -59,77 +59,82 @@
         {nodelay,   true}
 ]).
 
-%% ============================== exported API =====================================
+%%--------------------------------------------------------------------
+%% Exported APIs
+%%--------------------------------------------------------------------
+
+connect(Host, Port, DeviceName) ->
+    DeviceNameBinary = device_name(DeviceName),
+    gen_server:start_link({via, ?MODBUS_VIA_MODULE, DeviceNameBinary}, ?MODULE, [Host, Port, DeviceNameBinary], []).
+
+disconnect(Device) ->
+    cast(Device, stop).
+
+send_request(Device, Req) ->
+    cast(Device, {send_request, Req, self()}).
 
 
-connect(Host, Port, DeviceName) when  is_list(DeviceName) ->
-    connect(Host, Port, list_to_binary(DeviceName));
-
-connect(Host, Port, DeviceName) when  is_binary(DeviceName) ->
-    ProcessName = device_to_process(DeviceName),
-    gen_server:start_link({local, ProcessName}, ?MODULE, [Host, Port, DeviceName], []).
-
-disconnect(Device) when is_list(Device) ->
-    disconnect(list_to_binary(Device));
-
-disconnect(Device) when is_binary(Device) ->
-    ProcessName = device_to_process(Device),
-    call(ProcessName, stop).
-
-send_request(Device, Req) when is_binary(Device) ->
-    gen_server:cast(device_to_process(Device), {send_request, Req, self()});
-
-send_request(Device, Req) when is_atom(Device) ->
-    gen_server:cast(device_to_process(Device), {send_request, Req, self()}).
-
-
-%% ============================== gen_server API =====================================
+%%--------------------------------------------------------------------
+%% gen_server Callbacks
+%%--------------------------------------------------------------------
 
 call(Device, Request) ->
-    gen_server:call(Device, Request, ?CALL_TIMEOUT).
+    gen_server:call({via, ?MODBUS_VIA_MODULE, device_name(Device)}, Request).
+
+cast(Device, Request) ->
+    gen_server:cast({via, ?MODBUS_VIA_MODULE, device_name(Device)}, Request).
+
 
 init([Host, Port, DeviceName]) ->
+    true = is_binary(DeviceName),
+    ?LOG(debug, "start device ~p", [DeviceName]),
     self() ! reconnect,  % DO not call gen_tcp:connect() here, since it may be stuck.
-    {ok, #state{socket = undefined, device_name = DeviceName, server_addr = {Host, Port}}}.
+    {ok, #state{socket = undefined, timeout_count = 0,
+                 device_name = DeviceName, server_addr = {Host, Port}}}.
 
-
-
-handle_call(stop, _From, State=#state{socket = Sock}) ->
-	gen_tcp:close(Sock),
-	{stop, normal, stopped, State};
 
 handle_call(_Req, _From, State) ->
-    {reply, {error, badreq}, State}.
+    {reply, {error, badreq}, State, hibernate}.
 
-handle_cast({send_request, Req=#modbus_req{msgid = MsgId}, From}, State)  ->
-    case catch request_and_response(Req, State) of
-        {'EXIT', Error} ->
-            ?LOG(error, "sending Request get error ~p~n", [Error]);
-        #modbus_frame{funcode = Funcode, payload = Data} ->
-            emq_modbus_control:send_response(From, #modbus_rsp{device_name = State#state.device_name,
-                                                                 msgid = MsgId,
-                                                                 funcode = Funcode,
-                                                                 data = Data});
-        {error, Reason} ->
-            % If the slave does not receive the query due to a communication error, no response is returned.
-            % The master program will eventually process a timeout condition for the query.
-            ?LOG(error, "send request get error: ~p~n", [Reason])
-    end,
-    {noreply, next_id(State)};
+handle_cast({send_request, Req, From}, State=#state{socket = undefined})  ->
+    {noreply, State#state{pending_req = {Req, From}}};
+handle_cast({send_request, Req, From}, State)  ->
+    NewState = request_and_response(Req, From, State),
+    {noreply, next_id(NewState)};
+
+handle_cast(stop, State=#state{socket = undefined}) ->
+    {stop, normal, State};
+handle_cast(stop, State=#state{socket = Sock}) ->
+    gen_tcp:close(Sock),
+    {stop, normal,State};
+
 
 handle_cast(Msg, State) ->
-    ?LOG(error, "emq_modbus_device, ignore unknow msg=~p~n", [Msg]),
-    {noreply, State}.
+    ?LOG(error, "emq_modbus_device, ignore unknow msg=~p", [Msg]),
+    {noreply, State, hibernate}.
 
-handle_info(reconnect, State=#state{device_name = DevinceName, server_addr = {Host, Port}}) ->
+handle_info(reconnect, State=#state{device_name = DevinceName,
+                                      pending_req = PendingReq,
+                                      server_addr = {Host, Port}}) ->
     case connect_tcp(Host, Port) of
         {ok, Sock} ->
-            {noreply, State#state{socket = Sock}};
+            ?LOG(info, "success connected ~p ~p:~p", [DevinceName, Host, Port]),
+            NewState = handle_pending_req(PendingReq,
+                                          State#state{socket = Sock,
+                                                       timeout_count = 0,
+                                                       pending_req = undefined}),
+            {noreply, NewState};
         {error, _Error} ->
-            ?LOG(error, "fail to connect ~p ~p:~p~n", [DevinceName, Host, Port]),
-            reconnect_tcp(),
-            {noreply, State#state{socket = undefined}}
+            ?LOG(error, "fail to connect ~p ~p:~p", [DevinceName, Host, Port]),
+            NewState = reconnect_tcp(false, State),
+            {noreply, NewState, hibernate}
     end;
+
+handle_info({suback, _, _}, State) ->
+    {noreply, State};
+
+handle_info({subscribe, _}, State) ->
+    {noreply, State};
 
 handle_info(Info, State) ->
     ?LOG(error, "emq_modbus_device, ignore unknow info=~p~n", [Info]),
@@ -145,20 +150,55 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 
-%% ============================== internal functions =====================================
+%%--------------------------------------------------------------------
+%% Internal Functions
+%%--------------------------------------------------------------------
 
 connect_tcp(Host, Port) ->
     gen_tcp:connect(Host, Port, ?SOCKOPTS, ?SOCK_TIMEOUT).
-    
-reconnect_tcp() ->
-    erlang:send_after(10, self(), reconnect).
 
+reconnect_tcp(false, State) ->
+    erlang:send_after(10, self(), reconnect),
+    State#state{socket = undefined};
+reconnect_tcp(true, State) ->
+    self() ! reconnect,
+    State#state{socket = undefined}.
 
-request_and_response(Req, State) ->
-    send_and_recv(Req, State).
+request_and_response(Req=#modbus_req{msgid = MsgId}, From, State=#state{device_name = DeviceName}) ->
+    % If the slave does not receive the query due to a communication error, no response is returned.
+    % The master program will eventually process a timeout condition for the query.
+    case catch send_and_recv(Req, State) of
+        #modbus_frame{funcode = Funcode, payload = Data} ->
+            Resp = #modbus_rsp{device_name = DeviceName, msgid = MsgId,
+                funcode = Funcode, data = Data},
+            emq_modbus_control:send_response(From, Resp),
+            State#state{timeout_count = 0};
+        {'EXIT', Error} ->
+            ?LOG(error, "sending Request get error ~p", [Error]),
+            State;
+        {error, closed} ->
+            ?LOG(error, "socket is closed abnormaly", []),
+            reconnect_tcp(true, State#state{pending_req = {Req, From}});
+        {error, timeout} ->
+            handle_timeout(State);
+        {error, Reason} ->
+            ?LOG(error, "send request get error: ~p~n", [Reason]),
+            State
+    end.
+
+handle_timeout(State=#state{timeout_count = ?TIMEOUT_MAX}) ->
+    ?LOG(debug, "socket has too many timeout", []),
+    reconnect_tcp(true, State);
+handle_timeout(State=#state{timeout_count = Count}) ->
+    State#state{timeout_count = Count+1}.
+
+handle_pending_req(undefined, State) ->
+    State;
+handle_pending_req({Req, From}, State) ->
+    ?LOG(debug, "handle_pending_req ~p", [Req]),
+    request_and_response(Req, From, State).
 
 send_and_recv(_Req, #state{socket = undefined}) ->
-    ?LOG(error, "discard request since server has not been connected!~n", []),
     {error, "server has not been connected!"};
 
 send_and_recv(Req, State) ->
@@ -171,7 +211,6 @@ send_and_recv(Req, State) ->
                     {error, Reason}
             end;
         {error, Reason} ->
-            ?LOG(error, "send_and_recv has error, Reason=~p~n", [Reason]),
             {error, Reason}
     end.
 
@@ -222,17 +261,13 @@ next_id(State = #state{tid = Tid}) when Tid >= 16#EFFF ->
 next_id(State = #state{tid = Tid}) ->
     State#state{tid = Tid+1}.
 
-device_to_process(DeviceName) when is_binary(DeviceName) ->
-    M = atom_to_binary(?MODULE, utf8),
-    ProcessName = <<M/binary, "_", DeviceName/binary>>,
-    case catch binary_to_existing_atom(ProcessName, utf8) of
-        {'EXIT', _} -> binary_to_atom(ProcessName, utf8);
-        Atom -> Atom
-    end;
 
-device_to_process(DeviceName) when is_atom(DeviceName) ->
-    device_to_process(atom_to_binary(DeviceName, utf8));
 
-device_to_process(DeviceName) when is_list(DeviceName) ->
-    device_to_process(list_to_binary(DeviceName)).
+device_name(DeviceName) when is_atom(DeviceName) ->
+    atom_to_binary(DeviceName, utf8);
+device_name(DeviceName) when is_list(DeviceName) ->
+    list_to_binary(DeviceName);
+device_name(DeviceName) when is_binary(DeviceName) ->
+    DeviceName.
+
 

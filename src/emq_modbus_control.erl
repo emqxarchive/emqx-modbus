@@ -19,17 +19,14 @@
 %%% OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 %%% SOFTWARE.
 %%%-----------------------------------------------------------------------------
-%%% @doc
-%%% controller of modbus-tcp gateway..
-%%%
-%%% @end
-%%%-----------------------------------------------------------------------------
+
 -module(emq_modbus_control).
 
--include("emodbus.hrl").
+-include("emq_modbus.hrl").
+-include_lib("emqttd/include/emqttd.hrl").
 
 %% modbus API Exports
--export([start_link/4, stop/0, send_response/2]).
+-export([start_link/2, stop/0, send_response/2]).
 
 -behaviour(gen_server).
 
@@ -39,15 +36,31 @@
 
 -record(state, {
         topic_prefix :: binary(),
-        qos         :: 0..2,
-        retain      :: boolean(),
-        tid = 1     :: 1..16#ff
+        proto
  }).
 
-%% ============================== exported API =====================================
+-ifdef(TEST).
+-define(PROTO_INIT(),                   (self() ! {keepalive, start, 10})).
+-define(PROTO_SUBSCRIBE(X, Y),          test_broker_api:subscribe(X)).
+-define(PROTO_PUBLISH(A1, A2, P),       test_broker_api:publish(A1, A2)).
+-define(PROTO_DELIVER_ACK(A1, A2),      ok).
+-define(PROTO_SHUTDOWN(A, B),           ok).
+-else.
+-define(PROTO_INIT(),                   emq_modbus_mqtt_adapter:proto_init()).
+-define(PROTO_SUBSCRIBE(X, Y),          emq_modbus_mqtt_adapter:proto_subscribe(X, Y)).
+-define(PROTO_PUBLISH(A1, A2, P),       emq_modbus_mqtt_adapter:proto_publish(A1, A2, P)).
+-define(PROTO_DELIVER_ACK(Msg, State),  emq_modbus_mqtt_adapter:proto_deliver_ack(Msg, State)).
+-define(PROTO_SHUTDOWN(A, B),           emqttd_protocol:shutdown(A, B)).
+-endif.
 
-start_link(CompanyName, EdgeName, Qos, Retain) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [CompanyName, EdgeName, Qos, Retain], []).
+
+
+%%--------------------------------------------------------------------
+%% Exported APIs
+%%--------------------------------------------------------------------
+
+start_link(CompanyName, EdgeName) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [CompanyName, EdgeName], []).
 
 stop() ->
     gen_server:stop(?MODULE).
@@ -55,57 +68,74 @@ stop() ->
 send_response(Control, Response) ->
     gen_server:cast(Control, {send_response, Response, self()}).
 
-%% ============================== gen_server API =====================================
+%%--------------------------------------------------------------------
+%% gen_server Callbacks
+%%--------------------------------------------------------------------
 
-init([CompanyName, EdgeName, Qos, Retain]) ->
+init([CompanyName, EdgeName]) ->
     CompanyName1 = list_to_binary(CompanyName),
     EdgeName1 = list_to_binary(EdgeName),
-    Topic = <<"/", CompanyName1/binary,  "/modbus_request/", EdgeName1/binary, "/+">>,
-    case emq_broker_api:subscribe(Topic) of
-        ok ->
-            {ok, #state{topic_prefix = <<"/", CompanyName1/binary,  "/modbus_response/", EdgeName1/binary, "/">>,
-                         qos = Qos, retain = Retain, tid = 0}};
-        {error, Error} ->
-            ?LOG(error, "subscribe topic=~p, error=~p~n", [Topic, Error]),
-            {stop, Error}
-    end.
+    Topic  = <<"/", CompanyName1/binary,  "/modbus_request/", EdgeName1/binary, "/+">>,
+    Prefix = <<"/", CompanyName1/binary,  "/modbus_response/", EdgeName1/binary, "/">>,
+    Proto = ?PROTO_INIT(),
+    NewProto = ?PROTO_SUBSCRIBE(Topic, Proto),
 
-handle_call(stop, _From, State) ->
-    % unsubsribe topics?
-	{stop, normal, stopped, State};
+    {ok, #state{topic_prefix = Prefix, proto = NewProto}}.
 
-handle_call(_Req, _From, State) ->
+handle_call(Req, _From, State) ->
+    ?LOG(error, "unexpected call ~p", [Req]),
     {reply, {error, badreq}, State}.
 
-handle_cast({send_response, Response, _From}, State) ->
+handle_cast({send_response, Response, _From}, State=#state{topic_prefix = TopicPrefix, proto = Proto}) ->
     #modbus_rsp{device_name = DeviceName, msgid = MsgId, funcode = Funcode, data = Data} = Response,
-    #state{qos = Qos, topic_prefix = TopicPrefix, retain = Retain} = State,
-    emq_broker_api:publish(DeviceName, Qos, Retain,
-                      <<TopicPrefix/binary, DeviceName/binary>>,
-                      <<MsgId:8, Funcode:8, Data/binary>>),
-    {noreply, State};
+    NewProto = ?PROTO_PUBLISH(<<TopicPrefix/binary, DeviceName/binary>>,
+                                       <<MsgId:8, Funcode:8, Data/binary>>,
+                                       Proto),
+    {noreply, State#state{proto = NewProto}};
 
-handle_cast(_Msg, State) ->
+handle_cast(Msg, State) ->
+    ?LOG(error, "unexpected cast ~p", [Msg]),
     {noreply, State}.
 
-handle_info({dispatch, Topic, <<MsgId:8, Code:8, Data/binary>>}, State) ->
-    TopicSplited = binary:split(Topic, <<"/">>, [global]),
-    DeviceName = lists:last(TopicSplited),
+handle_info({deliver, Msg=#mqtt_message{topic = Topic, payload = Payload}}, State=#state{proto = Proto}) ->
+    ?LOG(debug, "broker deliver Msg=~p", [Msg]),
+    NewProto = ?PROTO_DELIVER_ACK(Msg, Proto),
     try
+        <<MsgId:8, Code:8, Data/binary>> = Payload,
+        TopicSplited = binary:split(Topic, <<"/">>, [global]),
+        DeviceName = lists:last(TopicSplited),
         emq_modbus_device:send_request(DeviceName, #modbus_req{msgid = MsgId, funcode = Code, data = Data})
     catch
-        Err -> ?LOG(error, "fail to dispatch message to device=~p, error=~p~n", [DeviceName, Err])
+        Err -> ?LOG(error, "fail to dispatch message ~p, error=~p~n", [Topic, Err])
     end,
+    {noreply, State#state{proto = NewProto}};
+
+handle_info({keepalive,start,_Interval}, State) ->
+    %% ignore keepalive, since this mqtt client should be always on
+    %% to accept modbus request from cloud.
     {noreply, State};
 
-handle_info(_Info, State) ->
+handle_info({suback, _, _}, State) ->
+    {noreply, State};
+
+handle_info({subscribe,_}, State) ->
+    {noreply, State};
+
+handle_info(Info, State) ->
+    ?LOG(error, "unexpected info ~p", [Info]),
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, #state{proto = Proto}) ->
+    ?PROTO_SHUTDOWN(Reason, Proto),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+
+%%--------------------------------------------------------------------
+%% Internal Functions
+%%--------------------------------------------------------------------
 
 
 

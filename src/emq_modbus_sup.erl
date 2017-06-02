@@ -19,30 +19,27 @@
 %%% OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 %%% SOFTWARE.
 %%%-----------------------------------------------------------------------------
-%%% @doc
-%%% interface of emqttd.
-%%%
-%%% @end
-%%%-----------------------------------------------------------------------------
 -module(emq_modbus_sup).
 
 -behavior(supervisor).
 
--export([start_link/4, init/1]).
+-export([start_link/3, init/1]).
 
 %% @doc Start modbus device Supervisor.
--spec(start_link(list(), list(), integer(), boolean()) -> {ok, pid()}).
-start_link(CompanyName, EdgeName, Qos, Retain) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [CompanyName, EdgeName, Qos, Retain]).
+-spec(start_link(list(), list(), list()) -> {ok, pid()}).
+start_link(CompanyName, EdgeName, DeviceList) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, {CompanyName, EdgeName, DeviceList}).
 
 
-init([CompanyName, EdgeName, Qos, Retain]) ->
-    {ok, {{one_for_all, 50, 3600},
+init({CompanyName, EdgeName, DeviceList}) ->
+    {ok, {{one_for_one, 50, 3600},
         [
-            {emq_modbus_device_sup, {emq_modbus_device_sup, start_link, []},
-                temporary, 5000, worker, [emq_modbus_device_sup]},
-            {emq_modbus_control, {emq_modbus_control, start_link, [CompanyName, EdgeName, Qos, Retain]},
-                temporary, 5000, worker, [emq_modbus_device]}
+            {emq_modbus_registry, {emq_modbus_registry, start_link, []},
+                permanent, 5000, worker, [emq_modbus_registry]},
+            {emq_modbus_device_sup, {emq_modbus_device_sup, start_link, [DeviceList]},
+                permanent, 5000, supervisor, [emq_modbus_device_sup]},
+            {emq_modbus_control, {emq_modbus_control, start_link, [CompanyName, EdgeName]},
+                permanent, 5000, worker, [emq_modbus_device]}
         ]}}.
 
 

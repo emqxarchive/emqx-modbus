@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @Copyright (C) 2015-2017, Feng Lee <feng@emqtt.io>, All Rights Reserved.
+%%% @Copyright (C) 2016-2017, Feng Lee <feng@emqtt.io>, All Rights Reserved.
 %%%
 %%% Permission is hereby granted, free of charge, to any person obtaining a copy
 %%% of this software and associated documentation files (the "Software"), to deal
@@ -10,7 +10,7 @@
 %%%
 %%% The above copyright notice and this permission notice shall be included in all
 %%% copies or substantial portions of the Software.
-%%%
+%%% 
 %%% THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 %%% IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 %%% FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,11 +19,7 @@
 %%% OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 %%% SOFTWARE.
 %%%-----------------------------------------------------------------------------
-%%% @doc
-%%% Modbus Heaer
-%%%
-%%% @end
-%%%-----------------------------------------------------------------------------
+
 
 %%------------------------------------------------------------------------------
 %% Modbus Port
@@ -34,10 +30,10 @@
 %% Modbus Socket Options
 %%------------------------------------------------------------------------------
 -define(MODBUS_SOCKOPTS, [
-	binary,
-	{packet,    raw},
-	{reuseaddr, true},
-	{nodelay,   true}
+    binary,
+    {packet,    raw},
+    {reuseaddr, true},
+    {nodelay,   true}
 ]).
 
 %%------------------------------------------------------------------------------
@@ -98,8 +94,11 @@
         payload :: binary()
 }).
 
--type modbus_frame() :: #modbus_frame{}.
+-type(modbus_frame() :: #modbus_frame{}).
+-type(modbus_req()   :: #modbus_req{}).
 
+
+-define(MODBUS_VIA_MODULE, emq_modbus_registry).
 
 -define(LOG(Level, Format, Args),
     lager:Level("MODBUS-TCP: " ++ Format, Args)).

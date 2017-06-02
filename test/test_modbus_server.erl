@@ -20,120 +20,88 @@
 
 -behaviour(gen_server).
 
+-define(LOGT(Format, Args),
+    lager:debug("TEST_MODBUS_SERVER: " ++ Format, Args)).
+
 %% gen_server Function Exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
     terminate/2, code_change/3]).
 
--export([start_link/1, stop/0, set_case/1]).
+-export([start_link/1, stop/0, visitors/0]).
 
--record(state, {
-    listen_socket :: inet:socket(),
-    socket      :: inet:socket(),
-    case_num    :: integer()
-}).
+-record(state, {listen_socket :: inet:socket(), accepted = 0, test_func2}).
 
 
-start_link(Port) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [Port], []).
+start_link({Port, TestFunc, undefined}) ->
+    start_link({Port, TestFunc, fun(_) -> receive A -> A end end});
+start_link({Port, TestFunc, TestFunc2}) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, {Port, TestFunc, TestFunc2}, []).
 
 stop() ->
     gen_server:stop(?MODULE).
 
-set_case(CaseNumber) ->
-    io:format("API set server name=~p, case=~p~n", [?MODULE, CaseNumber]),
-    gen_server:cast(?MODULE, {set_case, CaseNumber, self()}).
+visitors() ->
+    gen_server:call(?MODULE, get_accepted).
 
 
-init([Port]) ->
-    process_flag(trap_exit, true),
-    {ok, Listen} = gen_tcp:listen(Port, [binary, {active, true}]),
-    {ok, #state{listen_socket = Listen}}.
+init({Port, TestFunc, TestFunc2}) ->
+    ?LOGT("start test_modbus_server~n", []),
+    {ok, Listen} = gen_tcp:listen(Port, [binary, {active, false}, {reuseaddr, true}]),
+    accept(Listen, TestFunc),
+    {ok, #state{listen_socket = Listen, test_func2 = TestFunc2}}.
 
-
-
-handle_call(stop, _From, State=#state{socket = Sock}) ->
-    gen_tcp:close(Sock),
-    {stop, normal, stopped, State};
+handle_call(get_accepted, _From, State=#state{accepted = A}) ->
+    {reply, A, State};
 
 handle_call(Req, _From, State) ->
-    io:format("test_modbus_server: ignore call Req=~p~n", [Req]),
+    ?LOGT("test_modbus_server: ignore call Req=~p~n", [Req]),
     {reply, {error, badreq}, State}.
 
-handle_cast({set_case, CaseNumber, From}, State=#state{listen_socket = Listen}) ->
-    io:format("server handle set case=~p~n", [CaseNumber]),
-    From ! go,
-    {ok, Socket} = gen_tcp:accept(Listen),
-    io:format("server accept socket=~p~n", [Socket]),
-    gen_tcp:recv(Socket, 0),
-    {noreply, State#state{case_num = CaseNumber}};
-
-handle_cast(start_accept, State=#state{listen_socket = Listen}) ->
-    {ok, Socket} = gen_tcp:accept(Listen),
-    gen_server:cast(self(), start_recv),
-    {noreply, State#state{socket = Socket}};
-
-handle_cast(start_recv, State=#state{socket = Socket}) ->
-    gen_tcp:recv(Socket, 0),
-    {noreply, State};
+handle_cast({accepted, _}, State=#state{listen_socket = LSockt, accepted = Acepted, test_func2 = TestFunc2}) ->
+    ?LOGT("test_modbus_server, TestFun2\n", []),
+    accept(LSockt, TestFunc2),
+    {noreply, State#state{accepted = Acepted + 1}};
 
 handle_cast(Msg, State) ->
-    io:format("test_modbus_server: ignore cast msg=~p~n", [Msg]),
+    ?LOGT("test_modbus_server: ignore cast msg=~p~n", [Msg]),
     {noreply, State}.
-
-handle_info({tcp, Socket, Bin}, State=#state{case_num = CaseNumber}) ->
-    Tid = validate_request(Bin, CaseNumber),
-    send_to_edge(Socket, CaseNumber, Tid),
-    {noreply, State};
 
 handle_info(Info, State) ->
-    io:format("test_modbus_server: ignore info=~p~n", [Info]),
+    ?LOGT("test_modbus_server: ignore info=~p~n", [Info]),
     {noreply, State}.
 
-terminate(Reason, _State) ->
-    io:format("test_modbus_server: terminate Reason=~p~n", [Reason]),
+terminate(Reason, #state{listen_socket = LSocket}) ->
+    ?LOGT("test_modbus_server: terminate Reason=~p~n", [Reason]),
+    gen_tcp:close(LSocket),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-send_to_edge(Socket, CaseNumber, Tid) ->
-    Body = get_respond_data(CaseNumber),
-    Len = size(Body) + 1,
-    Data = case CaseNumber of
-        4 -> <<Tid:16, 42:16, Len:16, 0:8, Body/binary>>;
-        5 -> <<Tid:16, 42:0, Len:16, 0:8>>;
-        _ -> <<Tid:16, 0:16, Len:16, 0:8, Body/binary>>
-    end,
-    io:format("send to edge ~p~n", [Data]),
-    gen_tcp:send(Socket, Data).
+% To be more robust we should be using spawn_link and trapping exits
+accept(LSocket, TestFunc) ->
+    proc_lib:spawn(?MODULE, accept_loop, [{self(), LSocket, TestFunc}]).
 
-validate_request(Bin, CaseNumber) ->
-    ExpectedRaw = expected_tcp_data(CaseNumber),
-    <<Tid:16, 0:16, Rest/binary>> = Bin,
-    Len = size(ExpectedRaw)+1,
-    Expected = <<Len:16, 0:8, ExpectedRaw/binary>>,
-    io:format("case ~p expected ~p~n", [CaseNumber, Expected]),
-    io:format("  against received ~p~n", [Rest]),
-    Expected = Rest,
-    Tid.
-
-
-
-expected_tcp_data(CaseNumber) ->
-    case CaseNumber of
-        1 -> <<7, 8, 9, 10>>;
-        4 -> <<7, 8, 9, 10>>;
-        5 -> <<7, 8, 9, 10>>;
-        6 -> <<7, 8, 9, 10>>
+accept_loop({Server, LSocket, TestFunc}) ->
+    try
+        R = gen_tcp:accept(LSocket),
+        % Let the server spawn a new process and replace this loop
+        % with the echo loop, to avoid blocking
+        gen_server:cast(Server, {accepted, self()}),
+        {ok, Socket} = R,
+        ?LOGT("accept a new tcp connection, Socket=~p~n", [Socket]),
+        ok = gen_tcp:controlling_process(Socket, self()),
+        TestFunc(Socket),
+        gen_tcp:close(Socket)
+    catch
+        error:A -> A;
+        throw:B -> B;
+        exit:C -> C
     end.
 
-get_respond_data(CaseNumber) ->
-    case CaseNumber of
-        1 -> <<7, 20, 30, 40>>;
-        4 -> <<32>>;
-        5 -> <<>>;
-        6 -> <<>>
-    end.
+
+
+
 
 

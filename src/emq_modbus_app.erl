@@ -27,23 +27,10 @@
 start(_Type, _Args) ->
     Company = application:get_env(?APP, company, "CompanyX"),
     EdgeName = application:get_env(?APP, edgename, "EdgeUnknown"),
-    Qos = application:get_env(?APP, qos, 1),
-    Retain = application:get_env(?APP, retain, false),
-
-    Ret = emq_modbus_sup:start_link(Company, EdgeName, Qos, Retain),
-
     DeviceList = application:get_env(?APP, device, []),
-    case length(DeviceList) of
-        0 -> [];
-        _ -> start_device(DeviceList)
-    end,
-    Ret.
+
+    emq_modbus_sup:start_link(Company, EdgeName, DeviceList).
+
 
 stop(_State) ->
     ok.
-
-start_device(DeviceList) ->
-    lists:map(fun ({Host, Port, DeviceName}) ->
-        emq_modbus_device_sup:start_device(Host, Port, DeviceName)
-              end,
-        DeviceList).

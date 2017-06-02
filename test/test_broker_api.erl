@@ -15,14 +15,18 @@
 %%--------------------------------------------------------------------
 
 -module(test_broker_api).
-
+-include_lib("emqttd/include/emqttd.hrl").
 -compile(export_all).
 
 -behaviour(gen_server).
 
 
-publish(ClientId, Qos, Retain, Topic, Payload) ->
-    gen_server:call(?MODULE, {publish, {ClientId, Qos, Retain, Topic, Payload}}).
+-define(LOGT(Format, Args),
+    lager:debug("TEST_BROKER: " ++ Format, Args)).
+
+
+publish(Topic, Payload) ->
+    gen_server:call(?MODULE, {publish, {Topic, Payload}}).
 
 get_published_msg() ->
     gen_server:call(?MODULE, get_published_msg).
@@ -34,7 +38,7 @@ get_subscrbied_topic() ->
     gen_server:call(?MODULE, get_subscribed_topic).
 
 dispatch(ProcName, Topic, Msg) ->
-    ProcName ! {dispatch, Topic, Msg}.
+    ProcName ! {deliver, #mqtt_message{topic = Topic, payload = Msg}}.
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -47,43 +51,41 @@ init(_Param) ->
 
 
 handle_call({publish, Msg}, _From, State) ->
-    io:format("test api publish ~p~n", [Msg]),
+    ?LOGT("test api publish ~p~n", [Msg]),
     put(unittest_message, Msg),
     {reply, ok, State};
 
 handle_call(get_published_msg, _From, State) ->
     Response = get(unittest_message),
-    io:format("test api get published msg=~p~n", [Response]),
+    ?LOGT("test api get published msg=~p~n", [Response]),
     {reply, Response, State};
 
 handle_call({subscribe, Topic}, _From, State) ->
-    io:format("test api subscribe Topic=~p~n", [Topic]),
+    ?LOGT("test api subscribe Topic=~p~n", [Topic]),
+    is_binary(Topic) orelse error("Topic should be a binary"),
     put(unittest_subscribe, Topic),
     {reply, ok, State};
 
 handle_call(get_subscribed_topic, _From, State) ->
     Response = get(unittest_subscribe),
-    io:format("test api get subscribed topic=~p~n", [Response]),
+    ?LOGT("test api get subscribed topic=~p~n", [Response]),
     {reply, Response, State};
 
-handle_call(stop, _From, State) ->
-    {stop, normal, stopped, State};
-
 handle_call(Req, _From, State) ->
-    io:format("test_modbus_server: ignore call Req=~p~n", [Req]),
+    ?LOGT("test_modbus_server: ignore call Req=~p~n", [Req]),
     {reply, {error, badreq}, State}.
 
 
 handle_cast(Msg, State) ->
-    io:format("test_modbus_server: ignore cast msg=~p~n", [Msg]),
+    ?LOGT("test_modbus_server: ignore cast msg=~p~n", [Msg]),
     {noreply, State}.
 
 handle_info(Info, State) ->
-    io:format("test_modbus_server: ignore info=~p~n", [Info]),
+    ?LOGT("test_modbus_server: ignore info=~p~n", [Info]),
     {noreply, State}.
 
 terminate(Reason, _State) ->
-    io:format("test_modbus_server: terminate Reason=~p~n", [Reason]),
+    ?LOGT("test_modbus_server: terminate Reason=~p~n", [Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

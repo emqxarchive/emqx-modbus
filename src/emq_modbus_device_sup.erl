@@ -28,22 +28,23 @@
 
 -behavior(supervisor).
 
--export([start_link/0, start_device/3, init/1]).
+-include("emq_modbus.hrl").
+
+-export([start_link/1, init/1]).
+
+-define(CHILD(Host, Port, Name),
+        {{modbus_device, Name}, {emq_modbus_device, connect, [Host, Port, Name]},
+            permanent, 5000, worker, [emq_modbus_device]}).
 
 %% @doc Start modbus device Supervisor.
--spec(start_link() -> {ok, pid()}).
-start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+-spec(start_link(list()) -> {ok, pid()}).
+start_link(DeviceList) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, DeviceList).
 
-%% @doc Start a CoAP Channel
--spec(start_device(list(), integer(), list()) -> {ok, pid()}).
-start_device(Host, Port, DeviceName) ->
-    supervisor:start_child(?MODULE, [Host, Port, DeviceName]).
 
-init([]) ->
-    {ok, {{simple_one_for_one, 0, 1},
-        [{modbus_device, {emq_modbus_device, connect, []},
-            temporary, 5000, worker, [emq_modbus_device]}]}}.
+init(DeviceList) ->
+    Childs = [ ?CHILD(Host, Port, list_to_binary(DeviceName)) || {Host, Port, DeviceName} <- DeviceList],
+    {ok, {{one_for_one, 128, 60}, Childs}}.
 
 
 

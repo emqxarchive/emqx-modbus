@@ -1,6 +1,6 @@
 PROJECT = emq_modbus
 PROJECT_DESCRIPTION = Modbus-TCP Gateway
-PROJECT_VERSION = 0.1
+PROJECT_VERSION = 0.2
 
 BUILD_DEPS = emqttd
 dep_emqttd = git https://github.com/emqtt/emqttd master

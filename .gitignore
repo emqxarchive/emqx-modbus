@@ -13,3 +13,7 @@ rel/example_project
 .erlang.mk/
 *.d
 logs
+cover/
+ct.coverdata
+eunit.coverdata
+test/ct.cover.spec
