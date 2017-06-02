@@ -1,7 +1,7 @@
 emq_modbus
 ===========
 
-Modbus-TCP Gateway for the EMQTT Broker
+Modbus-TCP Gateway for the EMQ Broker
 
 Configure Plugin
 ----------------
