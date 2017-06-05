@@ -9,6 +9,7 @@ TEST_DEPS = cuttlefish lager
 dep_cuttlefish = git https://github.com/emqtt/cuttlefish
 dep_lager      = git https://github.com/basho/lager master
 
+ERLC_OPTS += +debug_info
 ERLC_OPTS += +'{parse_transform, lager_transform}'
 TEST_ERLC_OPTS += +'{parse_transform, lager_transform}'
 
