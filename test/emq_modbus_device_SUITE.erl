@@ -1,18 +1,18 @@
-%%--------------------------------------------------------------------
-%% Copyright (c) 2012-2016 Feng Lee <feng@emqtt.io>.
-%%
-%% Licensed under the Apache License, Version 2.0 (the "License");
-%% you may not use this file except in compliance with the License.
-%% You may obtain a copy of the License at
-%%
-%%     http://www.apache.org/licenses/LICENSE-2.0
-%%
-%% Unless required by applicable law or agreed to in writing, software
-%% distributed under the License is distributed on an "AS IS" BASIS,
-%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-%% See the License for the specific language governing permissions and
-%% limitations under the License.
-%%--------------------------------------------------------------------
+%%%-------------------------------------------------------------------
+%%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%%%
+%%% Licensed under the Apache License, Version 2.0 (the "License");
+%%% you may not use this file except in compliance with the License.
+%%% You may obtain a copy of the License at
+%%%
+%%%     http://www.apache.org/licenses/LICENSE-2.0
+%%%
+%%% Unless required by applicable law or agreed to in writing, software
+%%% distributed under the License is distributed on an "AS IS" BASIS,
+%%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%%% See the License for the specific language governing permissions and
+%%% limitations under the License.
+%%%-------------------------------------------------------------------
 
 -module(emq_modbus_device_SUITE).
 
@@ -45,11 +45,11 @@ start_test_env(TestFunc) ->
     start_test_env(TestFunc, undefined).
 start_test_env(TestFunc, TestFunc2) ->
     test_modbus_server:start_link({?MODBUS_PORT, TestFunc, TestFunc2}),
-    test_broker_api:start_link().
+    test_mqtt_broker:start_link().
 
 stop_test_env() ->
     test_modbus_server:stop(),
-    test_broker_api:stop().
+    test_mqtt_broker:stop().
 
 
 case01(_Config) ->
@@ -66,12 +66,12 @@ case01(_Config) ->
     emq_modbus_control:start_link("company3", "Edge58"),
     emq_modbus_device:connect("localhost", ?MODBUS_PORT, "deviceA"),
 
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(200),
 
-    {<<"/company3/modbus_response/Edge58/deviceA">>, <<1, 7, 20, 30, 40>>} = test_broker_api:get_published_msg(),
+    {<<"/company3/modbus_response/Edge58/deviceA">>, <<1, 7, 20, 30, 40>>} = test_mqtt_broker:get_published_msg(),
     1 = test_modbus_server:visitors(),
 
     emq_modbus_device:disconnect("deviceA"),
@@ -81,7 +81,7 @@ case01(_Config) ->
 
 
 case02(_Config) ->
-    test_broker_api:start_link(),
+    test_mqtt_broker:start_link(),
 
     Vals = [{company, "Abc"},{edgename, "E1"},
             {device, [{"192.168.0.1", 502, "dev1"}, {"192.168.0.2", 502, "dev2"}]} ],
@@ -95,9 +95,9 @@ case02(_Config) ->
     true = is_process_alive(?WHEREIS_DEVICE(<<"dev2">>)),
     application:stop(emq_modbus),
 
-    <<"/Abc/modbus_request/E1/+">> = test_broker_api:get_subscrbied_topic(),
+    <<"/Abc/modbus_request/E1/+">> = test_mqtt_broker:get_subscrbied_topic(),
 
-    test_broker_api:stop(),
+    test_mqtt_broker:stop(),
     timer:sleep(1000).
 
 
@@ -109,13 +109,13 @@ case03(_Config) ->
     emq_modbus_device:connect("localhost", ?MODBUS_PORT, "deviceNOTEXIST"),
 
     timer:sleep(500),
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(1000),
 
     true = is_process_alive(?WHEREIS_DEVICE(<<"deviceNOTEXIST">>)),
-    undefined = test_broker_api:get_published_msg(),
+    undefined = test_mqtt_broker:get_published_msg(),
 
     emq_modbus_device:disconnect("deviceNOTEXIST"),
     emq_modbus_control:stop(),
@@ -138,13 +138,13 @@ case04(_Config) ->
     emq_modbus_device:connect("localhost", ?MODBUS_PORT, "deviceA"),
     timer:sleep(500),
 
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(200),
 
     true = is_process_alive(?WHEREIS_DEVICE(<<"deviceA">>)),
-    undefined = test_broker_api:get_published_msg(),
+    undefined = test_mqtt_broker:get_published_msg(),
 
     emq_modbus_device:disconnect("deviceA"),
     emq_modbus_control:stop(),
@@ -167,13 +167,13 @@ case05(_Config) ->
     emq_modbus_device:connect("localhost", ?MODBUS_PORT, "deviceA"),
     timer:sleep(500),
 
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(12000),
 
     true = is_process_alive(?WHEREIS_DEVICE(<<"deviceA">>)),
-    undefined = test_broker_api:get_published_msg(),
+    undefined = test_mqtt_broker:get_published_msg(),
 
     emq_modbus_device:disconnect("deviceA"),
     emq_modbus_control:stop(),
@@ -196,13 +196,13 @@ case06(_Config) ->
     emq_modbus_device:connect("localhost", ?MODBUS_PORT, "deviceA"),
     timer:sleep(500),
 
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(200),
 
     true = is_process_alive(?WHEREIS_DEVICE(<<"deviceA">>)),
-    undefined = test_broker_api:get_published_msg(),
+    undefined = test_mqtt_broker:get_published_msg(),
 
     emq_modbus_device:disconnect("deviceA"),
     emq_modbus_control:stop(),
@@ -223,13 +223,13 @@ case07(_Config) ->
     emq_modbus_device:connect("localhost", ?MODBUS_PORT, "deviceA"),
     timer:sleep(500),
 
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(200),
 
     true = is_process_alive(?WHEREIS_DEVICE(<<"deviceA">>)),
-    undefined = test_broker_api:get_published_msg(),
+    undefined = test_mqtt_broker:get_published_msg(),
     2 = test_modbus_server:visitors(),
 
     emq_modbus_device:disconnect("deviceA"),
@@ -257,13 +257,13 @@ case08(_Config) ->
 
     timer:sleep(300),
 
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(200),
 
     true = is_process_alive(?WHEREIS_DEVICE(<<"deviceA">>)),
-    {<<"/company3/modbus_response/Edge58/deviceA">>, <<1, 7, 20, 30, 40>>} = test_broker_api:get_published_msg(),
+    {<<"/company3/modbus_response/Edge58/deviceA">>, <<1, 7, 20, 30, 40>>} = test_mqtt_broker:get_published_msg(),
     2 = test_modbus_server:visitors(),
 
     emq_modbus_device:disconnect("deviceA"),
@@ -301,12 +301,12 @@ case09(_Config) ->
     ?LOGT("DO NOT be surprised! emq_modbus_device is inteded to get crashed!!!!!", []),
     timer:sleep(1800),
 
-    <<"/company3/modbus_request/Edge58/+">> = test_broker_api:get_subscrbied_topic(),
-    test_broker_api:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
+    <<"/company3/modbus_request/Edge58/+">> = test_mqtt_broker:get_subscrbied_topic(),
+    test_mqtt_broker:dispatch(emq_modbus_control, <<"/company3/modbus_request/Edge58/deviceA">>, <<1, 7, 8, 9, 10>>),
 
     timer:sleep(1200),
 
-    {<<"/company3/modbus_response/Edge58/deviceA">>, <<1, 7, 20, 30, 40>>} = test_broker_api:get_published_msg(),
+    {<<"/company3/modbus_response/Edge58/deviceA">>, <<1, 7, 20, 30, 40>>} = test_mqtt_broker:get_published_msg(),
     2 = test_modbus_server:visitors(),
 
     stop_test_env(),
