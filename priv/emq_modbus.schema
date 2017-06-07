@@ -1,13 +1,13 @@
-{mapping, "company", "emq_modbus.company", [
+{mapping, "modbus.company", "emq_modbus.company", [
   {datatype, string},
   {default, "companyX"}
 ]}.
 
-{mapping, "edgename", "emq_modbus.edgename", [
+{mapping, "modbus.edgename", "emq_modbus.edgename", [
   {datatype, string}
 ]}.
 
-{mapping, "device.$index", "emq_modbus.device", [
+{mapping, "modbus.device.$index", "emq_modbus.device", [
   {datatype, string}
 ]}.
 
@@ -15,7 +15,7 @@
 {translation,
  "emq_modbus.device",
   fun(Conf) ->
-      Names = cuttlefish_variable:filter_by_prefix("device", Conf),
+      Names = cuttlefish_variable:filter_by_prefix("modbus.device", Conf),
       lists:foldl(fun({_, DevString}, Acc) ->
                       case string:tokens(DevString, ", \t") of
                           [Name, IP, Port] ->
