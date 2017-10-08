@@ -7,7 +7,7 @@ dep_esockd = git https://github.com/emqtt/esockd           master
 dep_jsx    = git https://github.com/talentdeficit/jsx.git  master
 
 BUILD_DEPS = emqx
-dep_emqx = git git@github.com:emqx/emqx master
+dep_emqx = git https://github.com/emqtt/emqttd X
 
 TEST_DEPS = cuttlefish lager
 dep_cuttlefish = git https://github.com/emqtt/cuttlefish
