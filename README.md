@@ -92,8 +92,6 @@ Kick-out
 --------------
 In mode 0, a device start a new tcp connection and emq-modbus will terminate the old tcp connection. This applies to two devices with same identity, that is to say, a device will kick out another online device with the same identity.
 
-
-
 License
 -------
 
@@ -102,5 +100,5 @@ Apache License Version 2.0
 Author
 ------
 
-Feng Lee <feng@emqtt.io>
+EMQ X-Men Team.
 
