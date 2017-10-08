@@ -13,29 +13,22 @@
 %%% See the License for the specific language governing permissions and
 %%% limitations under the License.
 %%%-------------------------------------------------------------------
--module(emq_modbus_device_sup).
 
--behavior(supervisor).
+-module(emqx_modbus_app).
 
--include("emq_modbus.hrl").
+-behaviour(application).
 
--export([start_link/1, init/1]).
+-include("emqx_modbus.hrl").
 
--define(CHILD(Host, Port, Name),
-        {{modbus_device, Name}, {emq_modbus_device, connect, [Host, Port, Name]},
-            permanent, 5000, worker, [emq_modbus_device]}).
+-export([start/2, stop/1]).
 
-%% @doc Start modbus device Supervisor.
--spec(start_link(list()) -> {ok, pid()}).
-start_link(DeviceList) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, DeviceList).
+start(_Type, _Args) ->
+    emqx_modbus_sup:start_link(env(company, "CompanyX"), env(device, []),
+                               env(mode, 0), env(port, 502)).
 
+env(Name, Default) ->
+    application:get_env(?APP, Name, Default).
 
-init(DeviceList) ->
-    Childs = [ ?CHILD(Host, Port, list_to_binary(DeviceName)) || {Host, Port, DeviceName} <- DeviceList],
-    {ok, {{one_for_one, 128, 60}, Childs}}.
-
-
-
-
+stop(_State) ->
+    ok.
 

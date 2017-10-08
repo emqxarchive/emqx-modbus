@@ -14,24 +14,29 @@
 %%% limitations under the License.
 %%%-------------------------------------------------------------------
 
--module(emq_modbus_control).
-
--include("emq_modbus.hrl").
--include_lib("emqttd/include/emqttd.hrl").
-
-%% modbus API Exports
--export([start_link/2, stop/0, send_response/2]).
+-module(emqx_modbus_control).
 
 -behaviour(gen_server).
+
+-include("emqx_modbus.hrl").
+
+-include_lib("emqx/include/emqx.hrl").
+
+-include_lib("emqx/include/emqx_mqtt.hrl").
+
+%% modbus API Exports
+-export([start_link/2, stop/0, send_response/1]).
 
 %% gen_server Function Exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {
-        topic_prefix :: binary(),
-        proto
- }).
+-record(state,
+        { response_topic :: binary(),
+          proto          :: term(),
+          handler        :: atom(),
+          device_module  :: atom()
+        }).
 
 -ifdef(TEST).
 -define(PROTO_INIT(),                   (self() ! {keepalive, start, 10})).
@@ -40,67 +45,65 @@
 -define(PROTO_DELIVER_ACK(A1, A2),      ok).
 -define(PROTO_SHUTDOWN(A, B),           ok).
 -else.
--define(PROTO_INIT(),                   emq_modbus_mqtt_adapter:proto_init()).
--define(PROTO_SUBSCRIBE(X, Y),          emq_modbus_mqtt_adapter:proto_subscribe(X, Y)).
--define(PROTO_PUBLISH(A1, A2, P),       emq_modbus_mqtt_adapter:proto_publish(A1, A2, P)).
--define(PROTO_DELIVER_ACK(Msg, State),  emq_modbus_mqtt_adapter:proto_deliver_ack(Msg, State)).
--define(PROTO_SHUTDOWN(A, B),           emqttd_protocol:shutdown(A, B)).
+-define(PROTO_INIT(),                   emqx_modbus_mqtt_adapter:proto_init()).
+-define(PROTO_SUBSCRIBE(X, Y),          emqx_modbus_mqtt_adapter:proto_subscribe(X, Y)).
+-define(PROTO_PUBLISH(A1, A2, P),       emqx_modbus_mqtt_adapter:proto_publish(A1, A2, P)).
+-define(PROTO_DELIVER_ACK(Msg, State),  emqx_modbus_mqtt_adapter:proto_deliver_ack(Msg, State)).
+-define(PROTO_SHUTDOWN(A, B),           emqx_protocol:shutdown(A, B)).
 -endif.
-
-
 
 %%--------------------------------------------------------------------
 %% Exported APIs
 %%--------------------------------------------------------------------
 
-start_link(CompanyName, EdgeName) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [CompanyName, EdgeName], []).
+start_link(CompanyName, Mode) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [CompanyName, Mode], []).
 
 stop() ->
     gen_server:stop(?MODULE).
 
-send_response(Control, Response) ->
-    gen_server:cast(Control, {send_response, Response, self()}).
+send_response(Response) ->
+    gen_server:cast(?MODULE, {send_response_to_broker, Response}).
 
 %%--------------------------------------------------------------------
 %% gen_server Callbacks
 %%--------------------------------------------------------------------
 
-init([CompanyName, EdgeName]) ->
+init([CompanyName, Mode]) ->
+    Handler = application:get_env(?APP, handler, emqx_modbus_user_data),
     CompanyName1 = list_to_binary(CompanyName),
-    EdgeName1 = list_to_binary(EdgeName),
-    Topic  = <<"/", CompanyName1/binary,  "/modbus_request/", EdgeName1/binary, "/+">>,
-    Prefix = <<"/", CompanyName1/binary,  "/modbus_response/", EdgeName1/binary, "/">>,
+    Topic  = <<CompanyName1/binary,  <<"/modbus_request">>/binary>>,
+    ResponseTopic = <<CompanyName1/binary,  <<"/modbus_response">>/binary>>,
     Proto = ?PROTO_INIT(),
     NewProto = ?PROTO_SUBSCRIBE(Topic, Proto),
+    DevMod = case Mode of
+                 1 -> emqx_modbus_device_mode1;
+                 _ -> emqx_modbus_device_mode0
+             end,
 
-    {ok, #state{topic_prefix = Prefix, proto = NewProto}}.
+    {ok, #state{response_topic = ResponseTopic, proto = NewProto, handler = Handler, device_module = DevMod}}.
 
 handle_call(Req, _From, State) ->
     ?LOG(error, "unexpected call ~p", [Req]),
     {reply, {error, badreq}, State}.
 
-handle_cast({send_response, Response, _From}, State=#state{topic_prefix = TopicPrefix, proto = Proto}) ->
-    #modbus_rsp{device_name = DeviceName, msgid = MsgId, funcode = Funcode, data = Data} = Response,
-    NewProto = ?PROTO_PUBLISH(<<TopicPrefix/binary, DeviceName/binary>>,
-                                       <<MsgId:8, Funcode:8, Data/binary>>,
-                                       Proto),
+handle_cast({send_response_to_broker, Response}, State=#state{response_topic = ResponseTopic, proto = Proto}) ->
+    NewProto = ?PROTO_PUBLISH(ResponseTopic, Response, Proto),
     {noreply, State#state{proto = NewProto}};
 
 handle_cast(Msg, State) ->
     ?LOG(error, "unexpected cast ~p", [Msg]),
     {noreply, State}.
 
-handle_info({deliver, Msg=#mqtt_message{topic = Topic, payload = Payload}}, State=#state{proto = Proto}) ->
-    ?LOG(debug, "broker deliver Msg=~p", [Msg]),
+handle_info({deliver, Msg=#mqtt_message{topic = Topic, payload = Payload}},
+            State=#state{proto = Proto, handler = Handler, device_module = DeviceModule}) ->
+    ?LOG(debug, "receive broker delivered Msg=~p", [Msg]),
     NewProto = ?PROTO_DELIVER_ACK(Msg, Proto),
     try
-        <<MsgId:8, Code:8, Data/binary>> = Payload,
-        TopicSplited = binary:split(Topic, <<"/">>, [global]),
-        DeviceName = lists:last(TopicSplited),
-        emq_modbus_device:send_request(DeviceName, #modbus_req{msgid = MsgId, funcode = Code, data = Data})
+        {DeviceName, Req} = Handler:handle_dl_data(Topic, Payload),
+        DeviceModule:send_request(DeviceName, Req)
     catch
-        Err -> ?LOG(error, "fail to dispatch message ~p, error=~p~n", [Topic, Err])
+        _:Err -> ?LOG(error, "fail to send request to device, topic=~p, error=~p~n", [Topic, Err])
     end,
     {noreply, State#state{proto = NewProto}};
 
@@ -126,13 +129,7 @@ terminate(Reason, #state{proto = Proto}) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-
 %%--------------------------------------------------------------------
 %% Internal Functions
 %%--------------------------------------------------------------------
-
-
-
-
-
 

@@ -14,13 +14,11 @@
 %%% limitations under the License.
 %%%-------------------------------------------------------------------
 
--module(emq_modbus_registry).
-
--author("Feng Lee <feng@emqtt.io>").
-
--include("emq_modbus.hrl").
+-module(emqx_modbus_registry).
 
 -behaviour(gen_server).
+
+-include("emqx_modbus.hrl").
 
 %% API.
 -export([start_link/0, register_name/2, unregister_name/1, whereis_name/1, send/2, stop/0]).
@@ -32,12 +30,12 @@
 -record(state, {}).
 
 -define(RESPONSE_TAB, ets_modbus_device_process).
+
 -define(RESPONSE_REF_TAB, ets_modbus_device_process_ref).
 
-%% ------------------------------------------------------------------
-%% API Function Definitions
-%% ------------------------------------------------------------------
-
+%%--------------------------------------------------------------------
+%% Exported APIs
+%%--------------------------------------------------------------------
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -49,9 +47,8 @@ unregister_name(Name) ->
     gen_server:call(?MODULE, {unregister_name, Name}).
 
 whereis_name(Name) ->
-    ?LOG(debug, "whereis_name Name=~p", [Name]),
     case ets:lookup(?RESPONSE_TAB, Name) of
-        [] ->                    undefined;
+        [] -> undefined;
         [{Name, Pid, _MRef}] ->  Pid
     end.
 
@@ -60,16 +57,15 @@ send(Name, Msg) ->
         undefined ->
             exit({badarg, {Name, Msg}});
         Pid when is_pid(Pid) ->
-            Pid ! Msg,
-            Pid
+            Pid ! Msg, Pid
     end.
 
 stop() ->
     gen_server:stop(?MODULE).
 
-%% ------------------------------------------------------------------
-%% gen_server Function Definitions
-%% ------------------------------------------------------------------
+%%--------------------------------------------------------------------
+%% gen_server Callbacks
+%%--------------------------------------------------------------------
 
 init([]) ->
     ets:new(?RESPONSE_TAB, [set, named_table, protected]),
@@ -83,7 +79,8 @@ handle_call({register_name, Name, Pid}, _From, State) ->
             ets:insert(?RESPONSE_TAB, {Name, Pid, MRef}),
             ets:insert(?RESPONSE_REF_TAB, {MRef, Name, Pid}),
             {reply, yes, State};
-        true  ->   {reply, no, State}
+        true ->
+            {reply, no, State}
     end;
 
 handle_call({unregister_name, Name}, _From, State) ->
@@ -95,15 +92,13 @@ handle_call({unregister_name, Name}, _From, State) ->
             ets:delete(?RESPONSE_TAB, Name),
             ets:delete(?RESPONSE_REF_TAB, MRef)
     end,
-    {reply, ok, State};
+	{reply, ok, State};
 
 handle_call(_Request, _From, State) ->
-    {reply, ignored, State}.
-
+	{reply, ignored, State}.
 
 handle_cast(_Msg, State) ->
-    {noreply, State}.
-
+	{noreply, State}.
 
 handle_info({'DOWN', MRef, process, DownPid, _Reason}, State) ->
     case ets:lookup(?RESPONSE_REF_TAB, MRef) of
@@ -116,9 +111,8 @@ handle_info({'DOWN', MRef, process, DownPid, _Reason}, State) ->
     end,
     {noreply, State};
 
-
 handle_info(_Info, State) ->
-    {noreply, State}.
+	{noreply, State}.
 
 terminate(_Reason, _State) ->
     ets:delete(?RESPONSE_TAB),
@@ -126,9 +120,7 @@ terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-
+	{ok, State}.
 
 %%--------------------------------------------------------------------
 %% Internal functions
@@ -139,3 +131,4 @@ monitor_client(Pid) ->
 
 erase_monitor(MRef) ->
     catch erlang:demonitor(MRef, [flush]).
+

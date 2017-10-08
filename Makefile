@@ -1,9 +1,13 @@
-PROJECT = emq_modbus
-PROJECT_DESCRIPTION = Modbus-TCP Gateway
-PROJECT_VERSION = 0.2
+PROJECT = emqx_modbus
+PROJECT_DESCRIPTION = EMQ X Modbus-TCP Gateway
+PROJECT_VERSION = 0.5
 
-BUILD_DEPS = emqttd
-dep_emqttd = git https://github.com/emqtt/emqttd master
+DEPS = esockd jsx
+dep_esockd = git https://github.com/emqtt/esockd           master
+dep_jsx    = git https://github.com/talentdeficit/jsx.git  master
+
+BUILD_DEPS = emqx
+dep_emqx = git git@github.com:emqx/emqx master
 
 TEST_DEPS = cuttlefish lager
 dep_cuttlefish = git https://github.com/emqtt/cuttlefish
@@ -16,4 +20,4 @@ TEST_ERLC_OPTS += +'{parse_transform, lager_transform}'
 include erlang.mk
 
 app.config::
-	cuttlefish -l info -e etc/ -c etc/emq_modbus.conf -i priv/emq_modbus.schema -d data
+	cuttlefish -l info -e etc/ -c etc/emqx_modbus.conf -i priv/emqx_modbus.schema -d data

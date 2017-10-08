@@ -14,23 +14,24 @@
 %%% limitations under the License.
 %%%-------------------------------------------------------------------
 
--module(emq_modbus_app).
+-module(emqx_modbus_device_sup).
 
--author("Feng Lee <feng@emqtt.io>").
+-behavior(supervisor).
 
--behaviour(application).
+-include("emqx_modbus.hrl").
 
--export([start/2, stop/1]).
+-export([start_link/1, init/1]).
 
--define(APP, emq_modbus).
+-define(CHILD(Host, Port, Name),
+        {{modbus_device, Name}, {emqx_modbus_device_mode1, connect, [Host, Port, Name]},
+         permanent, 5000, worker, [emqx_modbus_device_mode1]}).
 
-start(_Type, _Args) ->
-    Company = application:get_env(?APP, company, "CompanyX"),
-    EdgeName = application:get_env(?APP, edgename, "EdgeUnknown"),
-    DeviceList = application:get_env(?APP, device, []),
+%% @doc Start modbus device Supervisor.
+-spec(start_link(list()) -> {ok, pid()}).
+start_link(DeviceList) ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, DeviceList).
 
-    emq_modbus_sup:start_link(Company, EdgeName, DeviceList).
+init(DeviceList) ->
+    Childs = [?CHILD(Host, Port, iolist_to_binary(DeviceName)) || {Host, Port, DeviceName} <- DeviceList],
+    {ok, {{one_for_one, 128, 60}, Childs}}.
 
-
-stop(_State) ->
-    ok.

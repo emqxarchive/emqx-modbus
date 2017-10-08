@@ -92,13 +92,15 @@ accept_loop({Server, LSocket, TestFunc}) ->
         {ok, Socket} = R,
         ?LOGT("accept a new tcp connection, Socket=~p~n", [Socket]),
         ok = gen_tcp:controlling_process(Socket, self()),
-        TestFunc(Socket),
-        gen_tcp:close(Socket)
+        TestFunc(Socket)
+        %gen_tcp:close(Socket)
     catch
         error:A -> A;
         throw:B -> B;
         exit:C -> C
-    end.
+    end,
+    % do not quit this process, otherwise tcp connection will be closed
+    timer:sleep(1000000).
 
 
 

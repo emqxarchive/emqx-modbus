@@ -15,7 +15,8 @@
 %%%-------------------------------------------------------------------
 
 -module(test_mqtt_broker).
--include_lib("emqttd/include/emqttd.hrl").
+-include_lib("emqx/include/emqx.hrl").
+-include_lib("emqx/include/emqx_mqtt.hrl").
 -compile(export_all).
 
 -behaviour(gen_server).
