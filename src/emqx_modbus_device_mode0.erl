@@ -21,13 +21,13 @@
 -include("emqx_modbus.hrl").
 
 %% esockd callback 
--export([start_link/1, send_request/2]).
+-export([start_link/2, send_request/2]).
 
 %% gen_server Function Exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {conn, handler, parser, device_name, msgid, keepalive}).
+-record(state, {transport, sock, handler, parser, device_name, msgid, keepalive}).
 
 -define(KEEPALIVE_START(X),   emqx_modbus_keepalive:start_timer(X, keepalive_timer)).
 -define(KEEPALIVE_RESTART(X), emqx_modbus_keepalive:restart_timer(X)).
@@ -39,8 +39,8 @@
 %% Exported APIs
 %%--------------------------------------------------------------------
 
-start_link(Conn) ->
-    {ok, proc_lib:spawn_link(?MODULE, init, [[Conn]])}.
+start_link(Transport, Sock) ->
+    {ok, proc_lib:spawn_link(?MODULE, init, [[Transport, Sock]])}.
 
 send_request(Device, Req) ->
     gen_server:cast({via, ?MODBUS_VIA_MODULE, Device}, {send_request_to_device, Req}).
@@ -50,16 +50,20 @@ send_request(Device, Req) ->
 %% gen_server Callbacks
 %%--------------------------------------------------------------------
 
-init([Conn]) ->
-    {ok, Conn1} = Conn:wait(),
-    Conn1:setopts([{active, once}]),
-    Handler = application:get_env(?APP, handler, emqx_modbus_user_data),
-    KeepaliveInterval = application:get_env(?APP, keepalive, 120),
-    gen_server:enter_loop(?MODULE, [], #state{conn = Conn1,
-                                              handler = Handler,
-                                              parser = emqx_modbus_frame:init(),
-                                              msgid = 0,
-                                              keepalive = ?KEEPALIVE_START(KeepaliveInterval)}).
+init([Transport, Sock]) ->
+    case Transport:wait() of
+        {ok, NewSock} ->
+            Transport:setopts(NewSock, [{active, once}]),
+            Handler = application:get_env(?APP, handler, emqx_modbus_user_data),
+            KeepaliveInterval = application:get_env(?APP, keepalive, 120),
+            gen_server:enter_loop(?MODULE, [], #state{transport    = Transport,
+                                                      sock         = NewSock,
+                                                      handler      = Handler,
+                                                      parser       = emqx_modbus_frame:init(),
+                                                      msgid        = 0,
+                                                      keepalive    = ?KEEPALIVE_START(KeepaliveInterval)}).
+        Error -> Transport:fast_close(Sock), Error
+    end.
 
 handle_call(Request, _From, State) ->
     ?LOG(error, "emqx_modbus_device_mode0, ignore unknown call=~p~n", [Request]),
@@ -73,11 +77,12 @@ handle_cast(Msg, State) ->
     ?LOG(error, "emqx_modbus_device_mode0, ignore unknown cast=~p~n", [Msg]),
     {noreply, State}.
 
-handle_info({tcp, _Sock, Data}, State = #state{conn = Conn, parser = Parser, keepalive = Keepalive}) ->
+handle_info({Ok, _Sock, Data}, State = #state{transport = Transport, sock = Sock, parser = Parser, keepalive = Keepalive})
+    when Ok =:= tcp; Ok =:= ssl ->
     NewKeepalive = ?KEEPALIVE_KICK(Keepalive),
-    {ok, PeerName} = Conn:peername(),
+    {ok, Peername} = Transport:ensure_ok_or_exit(peername, [Sock]),
     ?LOG(info, "~s - ~s~n", [esockd_net:format(peername, PeerName), Data]),
-    Conn:setopts([{active, once}]),
+    Transport:setopts(Sock, [{active, once}]),
     case emqx_modbus_frame:parse(Data, Parser) of
         {more_data, Parser1} ->
             {noreply, State#state{parser = Parser1, keepalive = NewKeepalive}};
@@ -94,11 +99,11 @@ handle_info({tcp, _Sock, Data}, State = #state{conn = Conn, parser = Parser, kee
             {noreply, State#state{parser = Parser5, keepalive = NewKeepalive}}
     end;
 
-handle_info({tcp_error, Sock, Reason}, State = #state{}) ->
+handle_info({Error, _Sock, Reason}, State = #state{}) when Error =:= tcp_error; Error =:= ssl_error ->
     ?LOG(error, "tcp error, Sock=~p, Reason=~p", [Sock, Reason]),
     {stop, {shutdown, {tcp_error, Reason}}, State};
 
-handle_info({tcp_closed, Sock}, State = #state{}) ->
+handle_info({Closed, Sock}, State = #state{}) when Closed =:= tcp_closed; Closed =:= ssl_closed ->
     ?LOG(debug, "tcp closed, Sock=~p", [Sock]),
     {stop, normal, State};
 
@@ -149,14 +154,14 @@ process_modbus_frame(#modbus_frame{header = #mbap_header{unit_id = UnitId}, func
 process_request(undefined, State) ->
     State;
 process_request(Req=#modbus_req{msgid = MsgId, uid = UnitId, funcode = FunCode, data = Data},
-    State=#state{conn = Conn, parser = Parser}) ->
+    State=#state{transport = Transport, sock = Sock, parser = Parser}) ->
     ?LOG(debug, "handle_pending_req ~p", [Req]),
     {ModBusData, NewParser} = emqx_modbus_frame:serialize(UnitId, FunCode, Data, Parser),
-    send_data(Conn, ModBusData),
+    send_data(Transport, Sock, ModBusData),
     State#state{msgid = MsgId, parser = NewParser}.
 
-send_data(Conn, Data) ->
-    try Conn:async_send(Data) of
+send_data(Transport, Sock, Data) ->
+    try Transport:async_send(Sock, Data) of
         true -> ok
     catch
         error:Error -> self() ! {shutdown, Error}

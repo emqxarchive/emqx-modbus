@@ -3,7 +3,7 @@ PROJECT_DESCRIPTION = EMQ X Modbus-TCP Gateway
 PROJECT_VERSION = 0.5
 
 DEPS = esockd jsx
-dep_esockd = git https://github.com/emqtt/esockd           master
+dep_esockd = git https://github.com/emqtt/esockd           emqx30
 dep_jsx    = git https://github.com/talentdeficit/jsx.git  master
 
 BUILD_DEPS = emqx
