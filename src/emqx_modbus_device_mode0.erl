@@ -51,7 +51,7 @@ send_request(Device, Req) ->
 %%--------------------------------------------------------------------
 
 init([Transport, Sock]) ->
-    case Transport:wait() of
+    case Transport:wait(Sock) of
         {ok, NewSock} ->
             Transport:setopts(NewSock, [{active, once}]),
             Handler = application:get_env(?APP, handler, emqx_modbus_user_data),
@@ -61,7 +61,7 @@ init([Transport, Sock]) ->
                                                       handler      = Handler,
                                                       parser       = emqx_modbus_frame:init(),
                                                       msgid        = 0,
-                                                      keepalive    = ?KEEPALIVE_START(KeepaliveInterval)}).
+                                                      keepalive    = ?KEEPALIVE_START(KeepaliveInterval)});
         Error -> Transport:fast_close(Sock), Error
     end.
 
@@ -80,7 +80,7 @@ handle_cast(Msg, State) ->
 handle_info({Ok, _Sock, Data}, State = #state{transport = Transport, sock = Sock, parser = Parser, keepalive = Keepalive})
     when Ok =:= tcp; Ok =:= ssl ->
     NewKeepalive = ?KEEPALIVE_KICK(Keepalive),
-    {ok, Peername} = Transport:ensure_ok_or_exit(peername, [Sock]),
+    {ok, PeerName} = Transport:ensure_ok_or_exit(peername, [Sock]),
     ?LOG(info, "~s - ~s~n", [esockd_net:format(peername, PeerName), Data]),
     Transport:setopts(Sock, [{active, once}]),
     case emqx_modbus_frame:parse(Data, Parser) of
@@ -99,7 +99,7 @@ handle_info({Ok, _Sock, Data}, State = #state{transport = Transport, sock = Sock
             {noreply, State#state{parser = Parser5, keepalive = NewKeepalive}}
     end;
 
-handle_info({Error, _Sock, Reason}, State = #state{}) when Error =:= tcp_error; Error =:= ssl_error ->
+handle_info({Error, Sock, Reason}, State = #state{}) when Error =:= tcp_error; Error =:= ssl_error ->
     ?LOG(error, "tcp error, Sock=~p, Reason=~p", [Sock, Reason]),
     {stop, {shutdown, {tcp_error, Reason}}, State};
 
